@@ -222,19 +222,18 @@ func main() {
 	wg.Add(1)
 	go syncBooks(args.kindleDir, args.appleBooksDir, args.docsDirs, errors, args.dryRun, &wg)
 
-	finished := make(chan struct{})
 	go func() {
 		wg.Wait()
-		finished <- struct{}{}
+		close(errors)
 	}()
 
-	select {
-	case err := <-errors:
+	var errFound bool
+	for err := range errors {
 		fmt.Fprintln(os.Stderr, err)
-		for err := range errors {
-			fmt.Fprintln(os.Stderr, err)
-		}
+		errFound = true
+	}
+
+	if errFound {
 		os.Exit(1)
-	case <-finished:
 	}
 }
