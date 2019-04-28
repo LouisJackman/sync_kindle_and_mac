@@ -26,7 +26,6 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-	"sync/atomic"
 )
 
 var defaultKindleDir = path.Join("/", "Volumes", "Kindle")
@@ -52,7 +51,7 @@ type args struct {
 }
 
 type bookSearch struct {
-	srcDir, extToMatch string
+	category, srcDir, extToMatch string
 }
 
 type foundBooks struct {
@@ -60,6 +59,7 @@ type foundBooks struct {
 	errors  chan error
 	wg      *sync.WaitGroup
 	count   *uint64
+	stats   chan copyingStats
 }
 
 type syncOperation struct {
@@ -68,9 +68,15 @@ type syncOperation struct {
 	dryRun                   bool
 }
 
+type copyingStats struct {
+	category string
+	count    uint
+}
+
 type syncResults struct {
 	errors chan error
 	wg     *sync.WaitGroup
+	stats  chan copyingStats
 }
 
 func lookupHomeDir() (string, error) {
@@ -100,19 +106,24 @@ func lookupDefaultDocsDirs(home string) []string {
 func findBooks(search bookSearch, found foundBooks) {
 	defer found.wg.Done()
 
-	var matchCount uint
+	var count uint
+
 	err := filepath.Walk(search.srcDir, func(path string, _ os.FileInfo, err error) error {
 		if err != nil {
 			found.errors <- err
 		} else if filepath.Ext(path) == search.extToMatch {
 			found.matches <- path
-			atomic.AddUint64(found.count, 1)
-			matchCount++
+			count++
 		}
 		return nil
 	})
 	if err != nil {
 		found.errors <- err
+	}
+
+	found.stats <- copyingStats{
+		category: search.category,
+		count:    count,
 	}
 }
 
@@ -120,15 +131,18 @@ func findAppleBooks(appleBooksDir string, found foundBooks) {
 	search := bookSearch{
 		srcDir:     appleBooksDir,
 		extToMatch: ".pdf",
+		category:   "Apple Books iCloud Folder",
 	}
 	findBooks(search, found)
 }
 
 func findDocFiles(docsDirs []string, found foundBooks) {
 	for _, dir := range docsDirs {
+		category := fmt.Sprintf("ad hoc mobi files in the %s directory", dir)
 		search := bookSearch{
 			srcDir:     dir,
 			extToMatch: ".mobi",
+			category:   category,
 		}
 
 		found.wg.Add(1)
@@ -175,7 +189,6 @@ func syncBooks(operation syncOperation, results syncResults) {
 	booksToSync := make(chan string)
 
 	var syncWait sync.WaitGroup
-	syncWait.Add(1)
 
 	var appleBooksCount uint64
 	foundAppleBooks := foundBooks{
@@ -183,7 +196,9 @@ func syncBooks(operation syncOperation, results syncResults) {
 		errors:  results.errors,
 		wg:      &syncWait,
 		count:   &appleBooksCount,
+		stats:   results.stats,
 	}
+	syncWait.Add(1)
 	go findAppleBooks(operation.appleBooksDir, foundAppleBooks)
 
 	var docFilesCount uint64
@@ -192,12 +207,14 @@ func syncBooks(operation syncOperation, results syncResults) {
 		errors:  results.errors,
 		wg:      &syncWait,
 		count:   &docFilesCount,
+		stats:   results.stats,
 	}
 	findDocFiles(operation.docsDirs, foundDocFiles)
 
 	go func() {
 		syncWait.Wait()
 		close(booksToSync)
+		close(results.stats)
 	}()
 
 	var copyWait sync.WaitGroup
@@ -277,6 +294,7 @@ func main() {
 	}
 
 	errors := make(chan error)
+	stats := make(chan copyingStats)
 
 	var wg sync.WaitGroup
 
@@ -289,12 +307,16 @@ func main() {
 	results := syncResults{
 		errors: errors,
 		wg:     &wg,
+		stats:  stats,
 	}
 
 	wg.Add(1)
 	go syncBooks(operation, results)
 
 	go func() {
+		for stat := range stats {
+			log.Printf("Copied %s count: %d\n", stat.category, stat.count)
+		}
 		wg.Wait()
 		close(errors)
 	}()
