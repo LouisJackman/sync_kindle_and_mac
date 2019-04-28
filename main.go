@@ -26,6 +26,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 )
 
 var defaultKindleDir = path.Join("/", "Volumes", "Kindle")
@@ -39,10 +40,37 @@ type copyOperation struct {
 	src, dest string
 }
 
+type copyResult struct {
+	wg     *sync.WaitGroup
+	errors chan error
+}
+
 type args struct {
 	kindleDir, appleBooksDir string
 	docsDirs                 []string
 	dryRun                   bool
+}
+
+type bookSearch struct {
+	srcDir, extToMatch string
+}
+
+type foundBooks struct {
+	matches chan string
+	errors  chan error
+	wg      *sync.WaitGroup
+	count   *uint64
+}
+
+type syncOperation struct {
+	kindleDir, appleBooksDir string
+	docsDirs                 []string
+	dryRun                   bool
+}
+
+type syncResults struct {
+	errors chan error
+	wg     *sync.WaitGroup
 }
 
 func lookupHomeDir() (string, error) {
@@ -69,34 +97,42 @@ func lookupDefaultDocsDirs(home string) []string {
 	}
 }
 
-func findBooks(srcDir, extToMatch string, booksToSync chan string, errors chan error, wg *sync.WaitGroup) uint {
-	defer wg.Done()
+func findBooks(search bookSearch, found foundBooks) {
+	defer found.wg.Done()
 
 	var matchCount uint
-	err := filepath.Walk(srcDir, func(path string, _ os.FileInfo, err error) error {
+	err := filepath.Walk(search.srcDir, func(path string, _ os.FileInfo, err error) error {
 		if err != nil {
-			errors <- err
-		} else if filepath.Ext(path) == extToMatch {
-			booksToSync <- path
+			found.errors <- err
+		} else if filepath.Ext(path) == search.extToMatch {
+			found.matches <- path
+			atomic.AddUint64(found.count, 1)
 			matchCount++
 		}
 		return nil
 	})
 	if err != nil {
-		errors <- err
-		return 0
+		found.errors <- err
 	}
-	return matchCount
 }
 
-func findAppleBooks(appleBooksDir string, booksToSync chan string, errors chan error, wg *sync.WaitGroup) {
-	findBooks(appleBooksDir, ".pdf", booksToSync, errors, wg)
+func findAppleBooks(appleBooksDir string, found foundBooks) {
+	search := bookSearch{
+		srcDir:     appleBooksDir,
+		extToMatch: ".pdf",
+	}
+	findBooks(search, found)
 }
 
-func findDocFiles(docsDirs []string, booksToSync chan string, errors chan error, wg *sync.WaitGroup) {
+func findDocFiles(docsDirs []string, found foundBooks) {
 	for _, dir := range docsDirs {
-		wg.Add(1)
-		go findBooks(dir, ".mobi", booksToSync, errors, wg)
+		search := bookSearch{
+			srcDir:     dir,
+			extToMatch: ".mobi",
+		}
+
+		found.wg.Add(1)
+		go findBooks(search, found)
 	}
 }
 
@@ -105,43 +141,59 @@ func fileExists(path string) bool {
 	return !os.IsNotExist(err)
 }
 
-func copyBook(kindleDir, book string, wg *sync.WaitGroup, errors chan error) {
-	defer wg.Done()
+func copyBook(operation copyOperation, result copyResult) {
+	defer result.wg.Done()
 
-	src, err := os.Open(book)
+	src, err := os.Open(operation.src)
 	if err != nil {
-		errors <- err
+		result.errors <- err
 		return
 	}
 	defer src.Close()
 
-	destPath := path.Join(kindleDir, path.Dir(book))
+	destPath := path.Join(operation.dest, path.Dir(operation.src))
 	if fileExists(destPath) {
 		return
 	}
 
 	dest, err := os.Open(destPath)
 	if err != nil {
-		errors <- err
+		result.errors <- err
 		return
 	}
 	defer dest.Close()
 
 	_, err = io.Copy(dest, src)
 	if err != nil {
-		errors <- err
+		result.errors <- err
 	}
 }
 
-func syncBooks(kindleDir, appleBooksDir string, docsDirs []string, errors chan error, dryRun bool, wg *sync.WaitGroup) {
-	defer wg.Done()
+func syncBooks(operation syncOperation, results syncResults) {
+	defer results.wg.Done()
 
 	booksToSync := make(chan string)
 
 	var syncWait sync.WaitGroup
 	syncWait.Add(1)
-	go findAppleBooks(appleBooksDir, booksToSync, errors, &syncWait)
-	findDocFiles(docsDirs, booksToSync, errors, &syncWait)
+
+	var appleBooksCount uint64
+	foundAppleBooks := foundBooks{
+		matches: booksToSync,
+		errors:  results.errors,
+		wg:      &syncWait,
+		count:   &appleBooksCount,
+	}
+	go findAppleBooks(operation.appleBooksDir, foundAppleBooks)
+
+	var docFilesCount uint64
+	foundDocFiles := foundBooks{
+		matches: booksToSync,
+		errors:  results.errors,
+		wg:      &syncWait,
+		count:   &docFilesCount,
+	}
+	findDocFiles(operation.docsDirs, foundDocFiles)
 
 	go func() {
 		syncWait.Wait()
@@ -150,11 +202,19 @@ func syncBooks(kindleDir, appleBooksDir string, docsDirs []string, errors chan e
 
 	var copyWait sync.WaitGroup
 	for book := range booksToSync {
-		if dryRun {
-			log.Printf("would copy book at %s to the Kindle at %s\n", book, kindleDir)
+		if operation.dryRun {
+			log.Printf("would copy book at %s to the Kindle at %s\n", book, operation.kindleDir)
 		} else {
 			copyWait.Add(1)
-			go copyBook(kindleDir, book, &copyWait, errors)
+			operation := copyOperation{
+				src:  book,
+				dest: operation.kindleDir,
+			}
+			result := copyResult{
+				errors: results.errors,
+				wg:     &copyWait,
+			}
+			go copyBook(operation, result)
 		}
 	}
 	copyWait.Wait()
@@ -219,8 +279,20 @@ func main() {
 	errors := make(chan error)
 
 	var wg sync.WaitGroup
+
+	operation := syncOperation{
+		kindleDir:     args.kindleDir,
+		appleBooksDir: args.appleBooksDir,
+		docsDirs:      args.docsDirs,
+		dryRun:        args.dryRun,
+	}
+	results := syncResults{
+		errors: errors,
+		wg:     &wg,
+	}
+
 	wg.Add(1)
-	go syncBooks(args.kindleDir, args.appleBooksDir, args.docsDirs, errors, args.dryRun, &wg)
+	go syncBooks(operation, results)
 
 	go func() {
 		wg.Wait()
