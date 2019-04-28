@@ -69,29 +69,35 @@ func lookupDefaultDocsDirs(home string) []string {
 	}
 }
 
-func findBooks(srcDir, extToMatch string, booksToSync chan string, errors chan error, wg *sync.WaitGroup) error {
+func findBooks(srcDir, extToMatch string, booksToSync chan string, errors chan error, wg *sync.WaitGroup) uint {
 	defer wg.Done()
-	return filepath.Walk(srcDir, func(path string, _ os.FileInfo, err error) error {
+
+	var matchCount uint
+	err := filepath.Walk(srcDir, func(path string, _ os.FileInfo, err error) error {
 		if err != nil {
 			errors <- err
-		}
-		if filepath.Ext(path) == extToMatch {
+		} else if filepath.Ext(path) == extToMatch {
 			booksToSync <- path
+			matchCount++
 		}
 		return nil
 	})
+	if err != nil {
+		errors <- err
+		return 0
+	}
+	return matchCount
 }
 
-func findAppleBooks(appleBooksDir string, booksToSync chan string, errors chan error, wg *sync.WaitGroup) error {
-	return findBooks(appleBooksDir, ".pdf", booksToSync, errors, wg)
+func findAppleBooks(appleBooksDir string, booksToSync chan string, errors chan error, wg *sync.WaitGroup) {
+	findBooks(appleBooksDir, ".pdf", booksToSync, errors, wg)
 }
 
-func findDocFiles(docsDirs []string, booksToSync chan string, errors chan error, wg *sync.WaitGroup) error {
+func findDocFiles(docsDirs []string, booksToSync chan string, errors chan error, wg *sync.WaitGroup) {
 	for _, dir := range docsDirs {
 		wg.Add(1)
 		go findBooks(dir, ".mobi", booksToSync, errors, wg)
 	}
-	return nil
 }
 
 func fileExists(path string) bool {
@@ -127,7 +133,9 @@ func copyBook(kindleDir, book string, wg *sync.WaitGroup, errors chan error) {
 	}
 }
 
-func syncBooks(kindleDir, appleBooksDir string, docsDirs []string, errors chan error, dryRun bool) {
+func syncBooks(kindleDir, appleBooksDir string, docsDirs []string, errors chan error, dryRun bool, wg *sync.WaitGroup) {
+	defer wg.Done()
+
 	booksToSync := make(chan string)
 
 	var syncWait sync.WaitGroup
@@ -210,7 +218,15 @@ func main() {
 
 	errors := make(chan error)
 
-	syncBooks(args.kindleDir, args.appleBooksDir, args.docsDirs, errors, args.dryRun)
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go syncBooks(args.kindleDir, args.appleBooksDir, args.docsDirs, errors, args.dryRun, &wg)
+
+	finished := make(chan struct{})
+	go func() {
+		wg.Wait()
+		finished <- struct{}{}
+	}()
 
 	select {
 	case err := <-errors:
@@ -219,6 +235,6 @@ func main() {
 			fmt.Fprintln(os.Stderr, err)
 		}
 		os.Exit(1)
-	default:
+	case <-finished:
 	}
 }
