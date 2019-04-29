@@ -28,7 +28,7 @@ import (
 	"sync"
 )
 
-var defaultKindleDir = path.Join("/", "Volumes", "Kindle")
+var defaultKindleDir = path.Join("/", "Volumes", "Kindle", "documents", "PDFs")
 
 const kindleDirHelp = "the directory into the the kindle is mounted"
 const appleBooksDirHelp = "the directory containing the Apple Books library"
