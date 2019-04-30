@@ -26,6 +26,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 )
 
 var defaultKindleDir = path.Join("/", "Volumes", "Kindle", "documents", "PDFs")
@@ -35,13 +36,20 @@ const appleBooksDirHelp = "the directory containing the Apple Books library"
 const docsDirsHelp = "the directories containing documents not managed by Apple Books, like ad hoc mobi files, separated by commas"
 const dryRunHelp = "whether to just inform where files would be copied, rather than actually doing it"
 
+type stats struct {
+	category string
+	count    uint64
+}
+
 type copyOperation struct {
 	src, dest string
+	dryRun    bool
 }
 
 type copyResult struct {
-	wg     *sync.WaitGroup
-	errors chan error
+	wg                        *sync.WaitGroup
+	errors                    chan error
+	skippedCount, copiedCount *uint64
 }
 
 type args struct {
@@ -59,7 +67,7 @@ type foundBooks struct {
 	errors  chan error
 	wg      *sync.WaitGroup
 	count   *uint64
-	stats   chan copyingStats
+	stats   chan stats
 }
 
 type syncOperation struct {
@@ -68,15 +76,10 @@ type syncOperation struct {
 	dryRun                   bool
 }
 
-type copyingStats struct {
-	category string
-	count    uint
-}
-
 type syncResults struct {
 	errors chan error
 	wg     *sync.WaitGroup
-	stats  chan copyingStats
+	stats  chan stats
 }
 
 func lookupHomeDir() (string, error) {
@@ -106,7 +109,7 @@ func lookupDefaultDocsDirs(home string) []string {
 func findBooks(search bookSearch, found foundBooks) {
 	defer found.wg.Done()
 
-	var count uint
+	var count uint64
 
 	err := filepath.Walk(search.srcDir, func(path string, _ os.FileInfo, err error) error {
 		if err != nil {
@@ -121,7 +124,7 @@ func findBooks(search bookSearch, found foundBooks) {
 		found.errors <- err
 	}
 
-	found.stats <- copyingStats{
+	found.stats <- stats{
 		category: search.category,
 		count:    count,
 	}
@@ -131,14 +134,14 @@ func findAppleBooks(appleBooksDir string, found foundBooks) {
 	search := bookSearch{
 		srcDir:     appleBooksDir,
 		extToMatch: ".pdf",
-		category:   "Apple Books iCloud Folder",
+		category:   "found books in Apple Books iCloud Folder",
 	}
 	findBooks(search, found)
 }
 
 func findDocFiles(docsDirs []string, found foundBooks) {
 	for _, dir := range docsDirs {
-		category := fmt.Sprintf("ad hoc mobi files in the %s directory", dir)
+		category := fmt.Sprintf("found Mobi files in the %s directory", dir)
 		search := bookSearch{
 			srcDir:     dir,
 			extToMatch: ".mobi",
@@ -155,8 +158,20 @@ func fileExists(path string) bool {
 	return !os.IsNotExist(err)
 }
 
-func copyBook(operation copyOperation, result copyResult) {
+func copyBook(operation copyOperation, result *copyResult) {
 	defer result.wg.Done()
+
+	destPath := path.Join(operation.dest, path.Base(operation.src))
+	if fileExists(destPath) {
+		atomic.AddUint64(result.skippedCount, 1)
+		return
+	}
+
+	if operation.dryRun {
+		log.Printf("would copy book at %s to the Kindle at %s\n", operation.src, destPath)
+		atomic.AddUint64(result.copiedCount, 1)
+		return
+	}
 
 	src, err := os.Open(operation.src)
 	if err != nil {
@@ -165,12 +180,8 @@ func copyBook(operation copyOperation, result copyResult) {
 	}
 	defer src.Close()
 
-	destPath := path.Join(operation.dest, path.Dir(operation.src))
-	if fileExists(destPath) {
-		return
-	}
-
-	dest, err := os.Open(destPath)
+	mode := os.O_WRONLY | os.O_CREATE | os.O_EXCL
+	dest, err := os.OpenFile(destPath, mode, 0644)
 	if err != nil {
 		result.errors <- err
 		return
@@ -181,6 +192,8 @@ func copyBook(operation copyOperation, result copyResult) {
 	if err != nil {
 		result.errors <- err
 	}
+
+	atomic.AddUint64(result.copiedCount, 1)
 }
 
 func syncBooks(operation syncOperation, results syncResults) {
@@ -214,27 +227,43 @@ func syncBooks(operation syncOperation, results syncResults) {
 	go func() {
 		syncWait.Wait()
 		close(booksToSync)
-		close(results.stats)
 	}()
 
+	var skippedCount, copiedCount uint64
 	var copyWait sync.WaitGroup
 	for book := range booksToSync {
-		if operation.dryRun {
-			log.Printf("would copy book at %s to the Kindle at %s\n", book, operation.kindleDir)
-		} else {
-			copyWait.Add(1)
-			operation := copyOperation{
-				src:  book,
-				dest: operation.kindleDir,
-			}
-			result := copyResult{
-				errors: results.errors,
-				wg:     &copyWait,
-			}
-			go copyBook(operation, result)
+		copyWait.Add(1)
+		operation := copyOperation{
+			src:    book,
+			dest:   operation.kindleDir,
+			dryRun: operation.dryRun,
 		}
+		result := copyResult{
+			errors:       results.errors,
+			wg:           &copyWait,
+			skippedCount: &skippedCount,
+			copiedCount:  &copiedCount,
+		}
+		go copyBook(operation, &result)
 	}
 	copyWait.Wait()
+
+	results.stats <- stats{
+		category: "books not copied because they already existed",
+		count:    skippedCount,
+	}
+
+	var copiedStatsCategory string
+	if operation.dryRun {
+		copiedStatsCategory = "books that would be copied"
+	} else {
+		copiedStatsCategory = "books copied"
+	}
+	results.stats <- stats{
+		category: copiedStatsCategory,
+		count:    copiedCount,
+	}
+	close(results.stats)
 }
 
 func missingArgPathErr(name, path string) error {
@@ -294,7 +323,7 @@ func main() {
 	}
 
 	errors := make(chan error)
-	stats := make(chan copyingStats)
+	stats := make(chan stats)
 
 	var wg sync.WaitGroup
 
@@ -315,7 +344,7 @@ func main() {
 
 	go func() {
 		for stat := range stats {
-			log.Printf("Copied %s count: %d\n", stat.category, stat.count)
+			log.Printf("%s: %d\n", stat.category, stat.count)
 		}
 		wg.Wait()
 		close(errors)
