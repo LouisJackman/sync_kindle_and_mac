@@ -191,6 +191,7 @@ func copyBook(operation copyOperation, result *copyResult) {
 	_, err = io.Copy(dest, src)
 	if err != nil {
 		result.errors <- err
+		return
 	}
 
 	atomic.AddUint64(result.copiedCount, 1)
