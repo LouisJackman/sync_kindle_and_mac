@@ -59,7 +59,8 @@ type args struct {
 }
 
 type bookSearch struct {
-	category, srcDir, extToMatch string
+	category, srcDir string
+	extsToMatch      []string
 }
 
 type foundBooks struct {
@@ -101,8 +102,7 @@ func lookupDefaultAppleBooksDir(home string) string {
 
 func lookupDefaultDocsDirs(home string) []string {
 	return []string{
-		path.Join(home, "Documents"),
-		path.Join(home, "Desktop"),
+		path.Join(home, "Documents", "Books, Papers & Articles"),
 	}
 }
 
@@ -114,9 +114,14 @@ func findBooks(search bookSearch, found foundBooks) {
 	err := filepath.Walk(search.srcDir, func(path string, _ os.FileInfo, err error) error {
 		if err != nil {
 			found.errors <- err
-		} else if filepath.Ext(path) == search.extToMatch {
-			found.matches <- path
-			count++
+		} else {
+			for _, extToMatch := range search.extsToMatch {
+				if filepath.Ext(path) == extToMatch {
+					found.matches <- path
+					count++
+					break
+				}
+			}
 		}
 		return nil
 	})
@@ -132,9 +137,9 @@ func findBooks(search bookSearch, found foundBooks) {
 
 func findAppleBooks(appleBooksDir string, found foundBooks) {
 	search := bookSearch{
-		srcDir:     appleBooksDir,
-		extToMatch: ".pdf",
-		category:   "found books in Apple Books iCloud Folder",
+		srcDir:      appleBooksDir,
+		extsToMatch: []string{".pdf"},
+		category:    "found books in Apple Books iCloud Folder",
 	}
 	findBooks(search, found)
 }
@@ -143,9 +148,9 @@ func findDocFiles(docsDirs []string, found foundBooks) {
 	for _, dir := range docsDirs {
 		category := fmt.Sprintf("found Mobi files in the %s directory", dir)
 		search := bookSearch{
-			srcDir:     dir,
-			extToMatch: ".mobi",
-			category:   category,
+			srcDir:      dir,
+			extsToMatch: []string{".mobi", ".pdf"},
+			category:    category,
 		}
 
 		found.wg.Add(1)
