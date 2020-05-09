@@ -24,3 +24,8 @@ as it expects those to be managed solely by Apple Books.
 
 Symlinks inside the documents directory are not followed.
 
+This repository is hosted [on
+GitLab.com](https://gitlab.com/louis.jackman/sync-kindle-and-mac). If you're
+seeing this on GitHub, you're on the official GitHub mirror. [Go to
+GitLab](https://gitlab.com/louis.jackman/sync-kindle-and-mac) to contribute.
+
