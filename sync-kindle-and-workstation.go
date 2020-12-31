@@ -1,21 +1,7 @@
 package main
 
-// Synchronise books between a Mac and a Kindle. In practice this means
-// synchronising from PDFs in the iCloud Apple Books folder and optionally mobi
-// files from a specified documents directory.
-//
-// It assumes that all PDFs are in the iCloud Apple Books folder, and all Mobi
-// files, being unreadable by Apple Books, are in the specified documents
-// directory.
-//
-// For now it'll warn about epub files in iCloud Books, warning that they cannot
-// be synchronised with the Kindle due to being unreadable on it, and will skip
-// but log PDF files outside of the iCloud Apple Books folder but inside the
-// specified documents directory.
-//
-// Symlinks inside the documents directory are not followed.
-
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -29,12 +15,11 @@ import (
 	"sync/atomic"
 )
 
-var defaultKindleDir = path.Join("/", "Volumes", "Kindle", "documents", "PDFs")
-
-const kindleDirHelp = "the directory into the the kindle is mounted"
-const appleBooksDirHelp = "the directory containing the Apple Books library"
-const docsDirsHelp = "the directories containing documents not managed by Apple Books, like ad hoc mobi files, separated by commas"
+const kindleDirHelp = "the destination directory into the the kindle is mounted"
+const docsDirsHelp = "the source directories containing documents, separated by colons"
 const dryRunHelp = "whether to just inform where files would be copied, rather than actually doing it"
+
+const docsDirsArgSplitChar = ":"
 
 type stats struct {
 	category string
@@ -53,9 +38,9 @@ type copyResult struct {
 }
 
 type args struct {
-	kindleDir, appleBooksDir string
-	docsDirs                 []string
-	dryRun                   bool
+	kindleDir string
+	docsDirs  []string
+	dryRun    bool
 }
 
 type bookSearch struct {
@@ -72,15 +57,24 @@ type foundBooks struct {
 }
 
 type syncOperation struct {
-	kindleDir, appleBooksDir string
-	docsDirs                 []string
-	dryRun                   bool
+	docsDirs  []string
+	kindleDir string
+	dryRun    bool
 }
 
 type syncResults struct {
 	errors chan error
 	wg     *sync.WaitGroup
 	stats  chan stats
+}
+
+func lookupDefaultKindleDir() (string, error) {
+	user, err := user.Current()
+	if err != nil {
+		return "", err
+	}
+
+	return path.Join("/", "media", user.Username, "Kindle", "documents", "PDFs"), nil
 }
 
 func lookupHomeDir() (string, error) {
@@ -91,18 +85,14 @@ func lookupHomeDir() (string, error) {
 
 	home := user.HomeDir
 	if len(home) == 0 {
-		return "", fmt.Errorf("no home dir found for current user %s", user.Uid)
+		return "", fmt.Errorf("no home dir found for current user %s", user.Username)
 	}
 	return home, nil
 }
 
-func lookupDefaultAppleBooksDir(home string) string {
-	return path.Join(home, "Library", "Mobile Documents", "iCloud~com~apple~iBooks", "Documents")
-}
-
 func lookupDefaultDocsDirs(home string) []string {
 	return []string{
-		path.Join(home, "Documents", "Books, Papers & Articles"),
+		path.Join(home, "Documents"),
 	}
 }
 
@@ -135,18 +125,9 @@ func findBooks(search bookSearch, found foundBooks) {
 	}
 }
 
-func findAppleBooks(appleBooksDir string, found foundBooks) {
-	search := bookSearch{
-		srcDir:      appleBooksDir,
-		extsToMatch: []string{".pdf"},
-		category:    "found books in Apple Books iCloud Folder",
-	}
-	findBooks(search, found)
-}
-
 func findDocFiles(docsDirs []string, found foundBooks) {
 	for _, dir := range docsDirs {
-		category := fmt.Sprintf("found Mobi files in the %s directory", dir)
+		category := fmt.Sprintf("found documents in the %s directory", dir)
 		search := bookSearch{
 			srcDir:      dir,
 			extsToMatch: []string{".mobi", ".pdf"},
@@ -209,17 +190,6 @@ func syncBooks(operation syncOperation, results syncResults) {
 
 	var syncWait sync.WaitGroup
 
-	var appleBooksCount uint64
-	foundAppleBooks := foundBooks{
-		matches: booksToSync,
-		errors:  results.errors,
-		wg:      &syncWait,
-		count:   &appleBooksCount,
-		stats:   results.stats,
-	}
-	syncWait.Add(1)
-	go findAppleBooks(operation.appleBooksDir, foundAppleBooks)
-
 	var docFilesCount uint64
 	foundDocFiles := foundBooks{
 		matches: booksToSync,
@@ -255,7 +225,7 @@ func syncBooks(operation syncOperation, results syncResults) {
 	copyWait.Wait()
 
 	results.stats <- stats{
-		category: "books not copied because they already existed",
+		category: "books not copied because they already existed on the destination Kindle",
 		count:    skippedCount,
 	}
 
@@ -283,10 +253,13 @@ func parseArgs() (result args, err error) {
 		return
 	}
 
-	defaultAppleBooksDir := lookupDefaultAppleBooksDir(homeDir)
+	var defaultKindleDir string
+	defaultKindleDir, err = lookupDefaultKindleDir()
+	if err != nil {
+		return
+	}
 
 	kindleDir := flag.String("kindle-dir", defaultKindleDir, kindleDirHelp)
-	appleBooksDir := flag.String("apple-books-dir", defaultAppleBooksDir, appleBooksDirHelp)
 	docsDirsStr := flag.String("docs-dirs", "", docsDirsHelp)
 	dryRun := flag.Bool("dry-run", false, dryRunHelp)
 	flag.Parse()
@@ -295,30 +268,36 @@ func parseArgs() (result args, err error) {
 	if len(*docsDirsStr) <= 0 {
 		docsDirs = lookupDefaultDocsDirs(homeDir)
 	} else {
-		docsDirs = strings.Split(*docsDirsStr, ",")
+		docsDirs = strings.Split(*docsDirsStr, docsDirsArgSplitChar)
 	}
 
 	if !fileExists(*kindleDir) {
 		err = fmt.Errorf(
-			"the directory %s does not exist; are you sure your Kindle is plugged in? Double-check by opening Finder and seeing if it is connected",
+			"the directory %s does not exist; are you sure your Kindle is plugged in and mounted? Double-check by opening Files and seeing whether it is connected",
 			*kindleDir,
 		)
-	} else if !fileExists(*appleBooksDir) {
-		err = missingArgPathErr("iCloud Apple Books", *appleBooksDir)
 	} else {
+		docsDirSet := make(map[string]bool)
 		for _, docsDir := range docsDirs {
 			if !fileExists(docsDir) {
 				err = missingArgPathErr("document files", docsDir)
-				break
+				return
 			}
+
+			if _, exists := docsDirSet[docsDir]; exists {
+				err = errors.New("duplicate source document directory: " + docsDir)
+				return
+			}
+			docsDirSet[docsDir] = true
 		}
+
 		result = args{
-			kindleDir:     *kindleDir,
-			appleBooksDir: *appleBooksDir,
-			docsDirs:      docsDirs,
-			dryRun:        *dryRun,
+			kindleDir: *kindleDir,
+			docsDirs:  docsDirs,
+			dryRun:    *dryRun,
 		}
 	}
+
 	return
 }
 
@@ -334,10 +313,9 @@ func main() {
 	var wg sync.WaitGroup
 
 	operation := syncOperation{
-		kindleDir:     args.kindleDir,
-		appleBooksDir: args.appleBooksDir,
-		docsDirs:      args.docsDirs,
-		dryRun:        args.dryRun,
+		kindleDir: args.kindleDir,
+		docsDirs:  args.docsDirs,
+		dryRun:    args.dryRun,
 	}
 	results := syncResults{
 		errors: errors,

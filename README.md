@@ -1,28 +1,27 @@
-# Synchronise Kindle & Mac
+# Synchronise Kindle & Workstation
 
 [![pipeline status](https://gitlab.com/louis.jackman/sync-kindle-and-workstation/badges/master/pipeline.svg)](https://gitlab.com/louis.jackman/sync-kindle-and-workstation/-/commits/master)
 
-Synchronise books between a Mac and a Kindle. In practice this means
-synchronising from PDFs in the iCloud Apple Books folder and optionally mobi
-files from a specified documents directory.
+Synchronise books between a workstation and a Kindle. In practice this
+means synchronising a connected Kindle volume with PDFs and mobi files
+in the specified documents directory.
+
+The defaults are Linux-specific, e.g. assuming a udisks2-style
+automount directory such as `/media/user/Kindle` for the destination
+Kindle and defaulting to `~/Documents` for the source. However, if
+these defaults are overridden with explicit values, it will likely
+work on other OSes too.
 
 ```shell
-$ go run sync-kindle-and-mac.go
-2019/04/30 05:52:12 found Mobi files in the /Users/User/Desktop directory: 0
-2019/04/30 05:52:12 found books in Apple Books iCloud Folder: 190
-2019/04/30 05:52:12 found Mobi files in the /Users/User/Documents directory: 2
-2019/04/30 05:52:15 books not copied because they already existed: 170
-2019/04/30 05:52:15 books copied: 22
+$ go run sync-kindle-and-workstation.go -docs-dirs "$HOME/Documents/Books, Papers & Articles/Languages:$HOME/Documents/Books, Papers & Articles/Miscellaneous:$HOME/Documents/Books, Papers & Articles/Security:$HOME/Documents/Books, Papers & Articles/Technology:$HOME/Documents/Books, Papers & Articles/Travel"
+2020/12/31 13:11:55 found documents in the /home/user/Documents/Books, Papers & Articles/Languages directory: 2
+2020/12/31 13:11:55 found documents in the /home/user/Documents/Books, Papers & Articles/Travel directory: 1
+2020/12/31 13:11:55 found documents in the /home/user/Documents/Books, Papers & Articles/Miscellaneous directory: 19
+2020/12/31 13:11:55 found documents in the /home/user/Documents/Books, Papers & Articles/Security directory: 207
+2020/12/31 13:11:55 found documents in the /home/user/Documents/Books, Papers & Articles/Technology directory: 95
+2020/12/31 13:11:55 books not copied because they already existed: 324
+2020/12/31 13:11:55 books copied: 0
 ```
-
-It assumes that all PDFs are in the iCloud Apple Books folder, and all Mobi
-files, being unreadable by Apple Books, are in the specified documents
-directory.
-
-For now it'll skip epub files in iCloud Books, as they cannot be synchronised
-with the Kindle due to being unreadable on it, and will skip PDF files outside
-of the iCloud Apple Books folder but inside the specified documents directory,
-as it expects those to be managed solely by Apple Books.
 
 Symlinks inside the documents directory are not followed.
 
