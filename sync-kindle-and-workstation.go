@@ -15,66 +15,72 @@ import (
 	"sync/atomic"
 )
 
-const kindleDirHelp = "the destination directory into the the kindle is mounted"
-const docsDirsHelp = "the source directories containing documents, separated by colons"
-const dryRunHelp = "whether to just inform where files would be copied, rather than actually doing it"
+const (
+	koboDirHelp  = "the destination directory into the the Kobo is mounted"
+	docsDirsHelp = "the source directories containing documents, separated by colons"
+	dryRunHelp   = "whether to just inform where files would be copied, rather than actually doing it"
 
-const docsDirsArgSplitChar = ":"
+	docsDirsArgSplitChar = ":"
+)
 
-type stats struct {
-	category string
-	count    uint64
-}
+type (
+	stats struct {
+		category string
+		count    uint64
+	}
 
-type copyOperation struct {
-	src, dest string
-	dryRun    bool
-}
+	copyOperation struct {
+		src, dest string
+		dryRun    bool
+	}
 
-type copyResult struct {
-	wg                        *sync.WaitGroup
-	errors                    chan error
-	skippedCount, copiedCount *uint64
-}
+	copyResult struct {
+		wg                        *sync.WaitGroup
+		errors                    chan error
+		skippedCount, copiedCount *uint64
+	}
 
-type args struct {
-	kindleDir string
-	docsDirs  []string
-	dryRun    bool
-}
+	args struct {
+		koboDir  string
+		docsDirs []string
+		dryRun   bool
+	}
 
-type bookSearch struct {
-	category, srcDir string
-	extsToMatch      []string
-}
+	bookSearch struct {
+		category, srcDir string
+		extsToMatch      []string
+	}
 
-type foundBooks struct {
-	matches chan string
-	errors  chan error
-	wg      *sync.WaitGroup
-	count   *uint64
-	stats   chan stats
-}
+	foundBooks struct {
+		matches chan string
+		errors  chan error
+		wg      *sync.WaitGroup
+		count   *uint64
+		stats   chan stats
+	}
 
-type syncOperation struct {
-	docsDirs  []string
-	kindleDir string
-	dryRun    bool
-}
+	syncOperation struct {
+		docsDirs []string
+		koboDir  string
+		dryRun   bool
+	}
 
-type syncResults struct {
-	errors chan error
-	wg     *sync.WaitGroup
-	stats  chan stats
-}
+	syncResults struct {
+		errors chan error
+		wg     *sync.WaitGroup
+		stats  chan stats
+	}
+)
 
-func lookupDefaultKindleDir() (string, error) {
+var extsToMatch = []string{".epub", ".pdf"}
+
+func lookupDefaultKoboDir() (string, error) {
 	user, err := user.Current()
 	if err != nil {
 		return "", err
 	}
 
-	return path.Join("/", "media", user.Username, "Kindle", "documents", "PDFs"), nil
+	return path.Join("/", "media", user.Username, "KOBOeReader"), nil
 }
 
 func lookupHomeDir() (string, error) {
@@ -130,7 +136,7 @@ func findDocFiles(docsDirs []string, found foundBooks) {
 		category := fmt.Sprintf("found documents in the %s directory", dir)
 		search := bookSearch{
 			srcDir:      dir,
-			extsToMatch: []string{".mobi", ".pdf"},
+			extsToMatch: extsToMatch,
 			category:    category,
 		}
 
@@ -154,7 +160,7 @@ func copyBook(operation copyOperation, result *copyResult) {
 	}
 
 	if operation.dryRun {
-		log.Printf("would copy book at %s to the Kindle at %s\n", operation.src, destPath)
+		log.Printf("would copy book at %s to the Kobo at %s\n", operation.src, destPath)
 		atomic.AddUint64(result.copiedCount, 1)
 		return
 	}
@@ -211,7 +217,7 @@ func syncBooks(operation syncOperation, results syncResults) {
 		copyWait.Add(1)
 		operation := copyOperation{
 			src:    book,
-			dest:   operation.kindleDir,
+			dest:   operation.koboDir,
 			dryRun: operation.dryRun,
 		}
 		result := copyResult{
@@ -225,7 +231,7 @@ func syncBooks(operation syncOperation, results syncResults) {
 	copyWait.Wait()
 
 	results.stats <- stats{
-		category: "books not copied because they already existed on the destination Kindle",
+		category: "books not copied because they already existed on the destination Kobo",
 		count:    skippedCount,
 	}
 
@@ -253,13 +259,13 @@ func parseArgs() (result args, err error) {
 		return
 	}
 
-	var defaultKindleDir string
-	defaultKindleDir, err = lookupDefaultKindleDir()
+	var defaultKoboDir string
+	defaultKoboDir, err = lookupDefaultKoboDir()
 	if err != nil {
 		return
 	}
 
-	kindleDir := flag.String("kindle-dir", defaultKindleDir, kindleDirHelp)
+	koboDir := flag.String("kobo-dir", defaultKoboDir, koboDirHelp)
 	docsDirsStr := flag.String("docs-dirs", "", docsDirsHelp)
 	dryRun := flag.Bool("dry-run", false, dryRunHelp)
 	flag.Parse()
@@ -271,10 +277,10 @@ func parseArgs() (result args, err error) {
 		docsDirs = strings.Split(*docsDirsStr, docsDirsArgSplitChar)
 	}
 
-	if !fileExists(*kindleDir) {
+	if !fileExists(*koboDir) {
 		err = fmt.Errorf(
-			"the directory %s does not exist; are you sure your Kindle is plugged in and mounted? Double-check by opening Files and seeing whether it is connected",
-			*kindleDir,
+			"the directory %s does not exist; are you sure your Kobo is plugged in and mounted? Double-check by opening Files and seeing whether it is connected",
+			*koboDir,
 		)
 	} else {
 		docsDirSet := make(map[string]bool)
@@ -292,9 +298,9 @@ func parseArgs() (result args, err error) {
 		}
 
 		result = args{
-			kindleDir: *kindleDir,
-			docsDirs:  docsDirs,
-			dryRun:    *dryRun,
+			koboDir:  *koboDir,
+			docsDirs: docsDirs,
+			dryRun:   *dryRun,
 		}
 	}
 
@@ -313,9 +319,9 @@ func main() {
 	var wg sync.WaitGroup
 
 	operation := syncOperation{
-		kindleDir: args.kindleDir,
-		docsDirs:  args.docsDirs,
-		dryRun:    args.dryRun,
+		koboDir:  args.koboDir,
+		docsDirs: args.docsDirs,
+		dryRun:   args.dryRun,
 	}
 	results := syncResults{
 		errors: errors,
