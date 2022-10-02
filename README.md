@@ -12,14 +12,11 @@ as `/var/media/user/KOBOeReader` for the destination Kobo and defaulting to
 explicit values, it will likely work on other OSes too.
 
 ```shell
-$ go run sync-kobo-and-workstation.go -docs-dirs "$HOME/Documents/Books, Papers & Articles/Languages:$HOME/Documents/Books, Papers & Articles/Miscellaneous:$HOME/Documents/Books, Papers & Articles/Security:$HOME/Documents/Books, Papers & Articles/Technology:$HOME/Documents/Books, Papers & Articles/Travel"
-2020/12/31 13:11:55 found documents in the /home/user/Documents/Books, Papers & Articles/Languages directory: 2
-2020/12/31 13:11:55 found documents in the /home/user/Documents/Books, Papers & Articles/Travel directory: 1
-2020/12/31 13:11:55 found documents in the /home/user/Documents/Books, Papers & Articles/Miscellaneous directory: 19
-2020/12/31 13:11:55 found documents in the /home/user/Documents/Books, Papers & Articles/Security directory: 207
-2020/12/31 13:11:55 found documents in the /home/user/Documents/Books, Papers & Articles/Technology directory: 95
-2020/12/31 13:11:55 books not copied because they already existed: 324
-2020/12/31 13:11:55 books copied: 0
+$ go build -o sync-kobo-and-workstation main.go
+$ ./sync-kobo-and-workstation
+2022/10/02 20:32:04 found documents in the /home/user/Documents directory: 305
+2022/10/02 20:32:07 books not copied because they already existed on the destination Kobo: 299
+2022/10/02 20:32:07 books copied: 6
 ```
 
 Symlinks inside the documents directory are not followed.
