@@ -12,11 +12,17 @@ just `~/Documents` for the source. However, if these defaults are overridden
 with explicit values, it will likely work on other OSes too.
 
 ```shell
-$ go build -o sync-kobo-and-workstation main.go
-$ ./sync-kobo-and-workstation
-2022/10/02 20:32:04 found documents in the /home/user/Documents directory: 305
-2022/10/02 20:32:07 books not copied because they already existed on the destination Kobo: 299
-2022/10/02 20:32:07 books copied: 6
+$ cd sync-kobo-and-workstation
+$ cargo build --release
+$ # Now, move the built executable at `target/release/sync-kobo-and-workstation`
+$ # wherever you like and run it like so:
+$ sync-kobo-and-workstation --documents-directories="$HOME/Documents"
+Book ./tmp/Paradigms of Artificial Intelligence Programming.epub already exists on the destination; will not copy across
+Book ./tmp/debian-handbook.epub already exists on the destination; will not copy across
+
+Found documents in documents directory at /var/home/user/Documents: 2
+Books not copied because they already exist on the destination Kobo: 2
+Book copied: 0
 ```
 
 Symlinks inside the documents directories are not followed.

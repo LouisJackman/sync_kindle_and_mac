@@ -1,8 +1,0 @@
-stages:
-- test
-sast:
-  variables:
-    SAST_DEFAULT_ANALYZERS: gosec
-  stage: test
-include:
-- template: Security/SAST.gitlab-ci.yml
