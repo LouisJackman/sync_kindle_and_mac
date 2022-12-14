@@ -171,8 +171,8 @@ async fn sync_books(
         if let Some(book_name) = book.file_name() {
             dest_path.push(book_name);
 
-            if let Ok(copy_op) = copy_to_non_existant(&book, &dest_path, dry_run).await {
-                copy_tasks.push(copy_op);
+            if let Ok(copy_task) = copy_to_non_existant(&book, &dest_path, dry_run).await {
+                copy_tasks.push(copy_task);
                 stats.send(Statistic::Copied).await?;
             } else {
                 let dest_str = path_str(&dest_path)?;
@@ -190,6 +190,50 @@ async fn sync_books(
     for task in copy_tasks {
         task.await??;
     }
+
+    Ok(())
+}
+
+async fn collect_stats(dest_dirs: &[PathBuf], mut stats: Receiver<Statistic>) -> Result<()> {
+    let mut found_src_documents: usize = 0;
+    let mut not_copied: usize = 0;
+    let mut copied: usize = 0;
+
+    while let Some(stat) = stats.recv().await {
+        use Statistic::*;
+        match stat {
+            FoundSrcDocument => {
+                found_src_documents += 1;
+            }
+            NotCopiedBecauseAlreadyExistedAtDest => {
+                not_copied += 1;
+            }
+            Copied => {
+                copied += 1;
+            }
+        }
+    }
+
+    let len = dest_dirs.len();
+    let dest_str: String =
+        dest_dirs
+            .iter()
+            .zip(1..)
+            .try_fold(String::new(), |mut s, (dir, i)| {
+                s.push_str(path_str(dir)?);
+                if i < len {
+                    s.push_str(" and ");
+                }
+                Ok::<String, Error>(s)
+            })?;
+
+    println_async!(
+        "\n\
+        Found documents in documents directory at {dest_str}: {found_src_documents}\n\
+        Books not copied because they already exist on the destination Kobo: {not_copied}\n\
+        Book copied: {copied}"
+    )
+    .await?;
 
     Ok(())
 }
@@ -258,50 +302,6 @@ async fn parse_args() -> Result<Args> {
         documents_directories,
         dry_run,
     })
-}
-
-async fn collect_stats(dest_dirs: &[PathBuf], mut stats: Receiver<Statistic>) -> Result<()> {
-    let mut found_src_documents: usize = 0;
-    let mut not_copied: usize = 0;
-    let mut copied: usize = 0;
-
-    while let Some(stat) = stats.recv().await {
-        use Statistic::*;
-        match stat {
-            FoundSrcDocument => {
-                found_src_documents += 1;
-            }
-            NotCopiedBecauseAlreadyExistedAtDest => {
-                not_copied += 1;
-            }
-            Copied => {
-                copied += 1;
-            }
-        }
-    }
-
-    let len = dest_dirs.len();
-    let dest_str: String =
-        dest_dirs
-            .iter()
-            .zip(1..)
-            .try_fold(String::new(), |mut s, (dir, i)| {
-                s.push_str(path_str(dir)?);
-                if i < len {
-                    s.push_str(" and ");
-                }
-                Ok::<String, Error>(s)
-            })?;
-
-    println_async!(
-        "\n\
-        Found documents in documents directory at {dest_str}: {found_src_documents}\n\
-        Books not copied because they already exist on the destination Kobo: {not_copied}\n\
-        Book copied: {copied}"
-    )
-    .await?;
-
-    Ok(())
 }
 
 #[tokio::main]
