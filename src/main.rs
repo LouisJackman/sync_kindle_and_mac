@@ -148,7 +148,7 @@ async fn copy_to_non_existant(
         let src_str = path_str(src_path)?.to_owned();
         let dest_str = path_str(dest_path)?.to_owned();
 
-        Ok(tokio::spawn(async move {
+        Ok(spawn(async move {
             io::copy(&mut src, &mut dest).await?;
             println_async!("Copied {src_str} to {dest_str}").await?;
             Ok(())
