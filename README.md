@@ -28,10 +28,7 @@ Book copied: 0
 Symlinks inside the documents directories are not followed.
 
 This repository is currently hosted [on
-GitLab.com](https://gitlab.com/louis.jackman/sync-kobo-and-workstation).
-Official mirrors exist on
-[SourceHut](https://git.sr.ht/~louisjackman/sync-kobo-and-workstation) and
-[GitHub](https://github.com/LouisJackman/sync-kobo-and-workstation). At the
-moment, GitLab is still the official hub for contributions such as PRs and
-issues.
-
+GitLab.com](https://gitlab.com/louis.jackman/sync-kobo-and-workstation). An
+official mirror exists on
+[GitHub](https://github.com/LouisJackman/sync-kobo-and-workstation). GitLab is
+still the official hub for contributions such as PRs and issues.
